@@ -625,6 +625,45 @@ Running both services 24 × 7 for a full month (~43,200 minutes):
 
 Vercel is a static/serverless hosting platform. It can host the React/Vite **frontend** directly. The PHP backend and the SQL Server database must be hosted separately (see notes below).
 
+### Can I use Vercel for everything and keep the DB on the university server?
+
+**Short answer: Partly — the frontend goes on Vercel, but the PHP backend cannot.**
+
+| Layer | Vercel? | Why |
+|-------|---------|-----|
+| React / Vite frontend | ✅ Yes | Vercel deploys static Vite builds natively. |
+| PHP backend (`OSRH_KASPA_PHP/`) | ❌ No | Vercel runs Node.js / Python / Go serverless functions. It does **not** support PHP, and there is no way to install the `sqlsrv` / `pdo_sqlsrv` PECL extension on Vercel. |
+| University SQL Server | ❌ Not directly | The university database is reachable only from **within the university network or via VPN**. Any PHP backend that needs to talk to it must therefore run on the university network as well. |
+
+#### Recommended split: Vercel + university server
+
+```
+Browser  ──►  Vercel (React SPA)
+                   │
+                   │  HTTPS API calls  (VITE_API_URL → university PHP host)
+                   ▼
+         University server  (Apache/IIS + PHP 8.x + sqlsrv)
+                   │
+                   │  sqlsrv / pdo_sqlsrv  (internal university network)
+                   ▼
+         University SQL Server
+```
+
+This is actually the team's official production path:
+
+1. **Deploy the frontend to Vercel** — follow the [Step-by-step: deploy the frontend to Vercel](#step-by-step-deploy-the-frontend-to-vercel-from-scratch) guide below.
+2. **Keep the PHP backend on the university server** — the server already has PHP with the SQLSRV drivers and can reach the university SQL Server over the local network.
+3. **Set `VITE_API_URL`** in Vercel's environment variables to the public URL of the university PHP host (e.g. `https://uni-server.example.edu/osrh`).
+4. **Ensure the university server allows inbound HTTPS** from the internet so that the Vercel-hosted React app can reach the PHP API.
+
+> **Why can't the PHP backend live on Vercel too?**
+> Vercel's runtime is built around serverless functions (Node.js, Python, Go, Ruby). PHP is not
+> supported, and the Microsoft SQLSRV extension (`sqlsrv.so` / `pdo_sqlsrv.so`) cannot be installed
+> there. If you want a cloud-hosted PHP backend you need a container-based service such as
+> Railway or Render (see [Where to host the PHP backend](#where-to-host-the-php-backend)).
+
+---
+
 ### Database used
 
 - **Engine**: Microsoft SQL Server (including SQL Server Express / Azure SQL)
