@@ -567,13 +567,55 @@ Also update `BASE_URL` to the public HTTPS URL of the PHP host, and set `APP_ENV
 
 ---
 
+### Railway pricing — is it free?
+
+**Short answer: No.** Railway does not offer a permanently free tier; the Trial plan provides a one-time $5 credit that is consumed quickly when running real services.
+
+| Plan | Cost | What you get |
+|------|------|--------------|
+| **Trial** | Free | $5 of one-time usage credits — no credit card needed, but credits are typically consumed within 1–3 days when both services are active, after which services stop. |
+| **Hobby** | $5 / month | Includes $5 of usage credits each month, then pay-as-you-go at the rates below. |
+| **Pro** | $20 / month | Includes $20 of usage credits/month, higher resource limits. |
+
+Railway bills by actual resource consumption:
+
+| Resource | Rate |
+|----------|------|
+| vCPU | ~$0.000463 / vCPU-minute |
+| RAM | ~$0.000231 / GB-minute |
+| Disk | ~$0.000054 / GB-minute |
+| Egress | ~$0.10 / GB |
+
+#### Realistic cost for PHP backend + SQL Server on Railway
+
+Running both services 24 × 7 for a full month (~43,200 minutes):
+
+| Service | vCPU | RAM | Estimated monthly cost |
+|---------|------|-----|------------------------|
+| PHP Docker service (small) | 0.25 | 512 MB | ~$10 |
+| SQL Server / MSSQL (needs more memory) | 0.5 | 1.5 GB | ~$25 |
+| **Total** | | | **~$15 – $35 / month** |
+
+> The $5/month Hobby plan credit covers only a fraction of this; you will be charged the difference.
+> The $5 Trial credit will run out in a matter of days with both services active.
+
+#### Cheaper alternatives if budget is a concern
+
+| Option | PHP host | SQL Server | Realistic cost |
+|--------|----------|------------|----------------|
+| **Render + Azure SQL** | Render free tier (spins down after inactivity) | Azure SQL serverless (free during Azure 12-month trial; ~$5/mo on-demand serverless after trial) | ~$0 – $5 / month |
+| **Oracle Always Free VPS** | Apache + PHP on Oracle Cloud free VM | SQL Server Express on the same free VM | Free (Oracle provides two Always Free ARM VMs) |
+| **Hetzner / DigitalOcean VPS** | Apache + PHP on a €4 – $6/mo VPS | SQL Server Express on the same VPS | ~$5 – $6 / month |
+
+---
+
 ### Quick-reference: recommended stack combinations
 
 | Scenario | PHP host | SQL Server | Notes |
 |----------|----------|------------|-------|
 | **Low-cost cloud** | Render (Docker) | Azure SQL free tier | Free or near-free for small traffic |
 | **All-in-one VPS** | Apache on VPS | SQL Server Express on same VPS | Simple; one machine to manage |
-| **Railway project** | Railway (Docker) | Railway MSSQL service | One dashboard; internal networking |
+| **Railway project** | Railway (Docker) | Railway MSSQL service | One dashboard; see [Railway pricing](#railway-pricing--is-it-free) (~$15–35/month, not free) |
 | **University server** | University Apache/IIS | University SQL Server | Team's official production path |
 | **Local development** | XAMPP (Windows) | SQL Server Express (local) | Fastest dev loop |
 
