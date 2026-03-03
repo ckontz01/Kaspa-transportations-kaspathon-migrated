@@ -473,6 +473,112 @@ Use environment variables for production-sensitive values.
 
 ---
 
+## Hosting the PHP Backend and SQL Server
+
+The React frontend (deployable on Vercel) is a static SPA that calls the PHP backend over HTTPS.
+The **PHP backend** and the **SQL Server database** must each run on a server that is publicly
+reachable from the internet so that both the frontend and end-users can access them.
+
+---
+
+### Where to host the PHP backend
+
+The backend is a plain PHP application that uses the `sqlsrv`/`pdo_sqlsrv` extension to talk to
+SQL Server. Any host that provides PHP 8.x with those extensions available is suitable.
+
+| Option | Notes |
+|--------|-------|
+| **VPS / Cloud VM** (DigitalOcean, Linode, Hetzner, AWS EC2, Azure VM, etc.) | Full control. Install Apache or Nginx + PHP-FPM + the [Microsoft SQLSRV extension for PHP](https://learn.microsoft.com/en-us/sql/connect/php/installation-tutorial-linux-mac). Point document root at `OSRH_KASPA_PHP/`. |
+| **Render (Docker)** | Create a `Dockerfile` in `OSRH_KASPA_PHP/` based on `php:8.2-apache`, install the SQLSRV PECL extension, and deploy as a Web Service. Render provides a public HTTPS URL automatically. |
+| **Railway** | Use a Railway service with a custom Dockerfile (same as Render approach). Railway can also host the SQL Server database in the same project. |
+| **Shared hosting / cPanel** | Only viable if the host provides the `sqlsrv` PHP extension. Most shared hosts do **not** include it; verify before choosing this option. |
+| **University / institutional server** | The team's official deployment target. Works as long as the server runs PHP 8.x with SQLSRV drivers and can reach the SQL Server instance. |
+
+**Minimum PHP setup on any Linux host:**
+
+```bash
+# Install PHP 8.x + Apache (Ubuntu/Debian example)
+sudo apt-get update
+sudo apt-get install -y apache2 php8.2 php8.2-cli php8.2-common \
+    php8.2-curl php8.2-mbstring php8.2-xml unzip curl
+
+# Install Microsoft ODBC driver (required by sqlsrv)
+# Replace 22.04 below with your Ubuntu version: $(lsb_release -rs)
+curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+    | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list \
+    | sudo tee /etc/apt/sources.list.d/mssql-release.list
+sudo apt-get update
+ACCEPT_EULA=Y sudo apt-get install -y msodbcsql18
+
+# Install SQLSRV PHP extension via PECL
+sudo pecl install sqlsrv pdo_sqlsrv
+echo "extension=sqlsrv.so"     | sudo tee /etc/php/8.2/apache2/conf.d/30-sqlsrv.ini
+echo "extension=pdo_sqlsrv.so" | sudo tee /etc/php/8.2/apache2/conf.d/30-pdo_sqlsrv.ini
+sudo service apache2 restart
+
+# Deploy the application (run from the root of the cloned repository)
+sudo cp -r OSRH_KASPA_PHP /var/www/html/osrh
+```
+
+---
+
+### Where to host SQL Server
+
+| Option | Notes |
+|--------|-------|
+| **Azure SQL Database** (recommended for cloud) | Fully managed, serverless tier available for low-cost/dev use. Accessible from any internet host via TCP 1433. Uses SQL authentication (`DB_USERNAME` / `DB_PASSWORD`). Free trial available. |
+| **SQL Server on the same VPS as PHP** | Install SQL Server Express (free) on the same VM that runs PHP. Use `localhost` (or `127.0.0.1,1433`) as `DB_HOST`. Zero network latency between PHP and SQL Server. |
+| **SQL Server on a separate VM** | Suitable for larger deployments. Open TCP 1433 in the firewall and use the VM's private IP (within a VPC/VNet) or public IP as `DB_HOST`. |
+| **Railway MSSQL service** | One-click MSSQL container in the same Railway project as the PHP service. Use the Railway-provided internal hostname as `DB_HOST`. |
+| **University / institutional SQL Server** | The team's current production target. Accessible only from within the university network or via VPN. |
+
+**Create the database (run once on any target):**
+
+```sql
+CREATE DATABASE OSRH_DB;
+GO
+```
+
+Then execute the setup scripts in order (see [Execute database scripts in order](#5-execute-database-scripts-in-order)).
+
+---
+
+### Wiring the PHP backend to SQL Server
+
+Edit `OSRH_KASPA_PHP/config/config.php` with the values for your chosen host:
+
+```php
+// ---------- DATABASE SETTINGS ----------
+define('DB_HOST',     'your-sql-server-host.example.com');  // hostname or IP; append ,1433 if needed
+define('DB_DATABASE', 'OSRH_DB');
+define('DB_USERNAME', 'osrh_user');   // SQL Server login
+define('DB_PASSWORD', 'StrongPass!'); // SQL Server password
+```
+
+> **Windows Authentication vs. SQL Authentication**
+> - On a local Windows machine (XAMPP + SQL Server Express) you can use Windows Authentication by
+>   leaving `DB_USERNAME` and `DB_PASSWORD` empty. The PHP process connects as the Windows user.
+> - On any Linux server, or when the PHP host and SQL Server are on different machines, you **must**
+>   use SQL Server Authentication: create a SQL login with appropriate permissions and fill in
+>   `DB_USERNAME` / `DB_PASSWORD`.
+
+Also update `BASE_URL` to the public HTTPS URL of the PHP host, and set `APP_ENV` to `production`.
+
+---
+
+### Quick-reference: recommended stack combinations
+
+| Scenario | PHP host | SQL Server | Notes |
+|----------|----------|------------|-------|
+| **Low-cost cloud** | Render (Docker) | Azure SQL free tier | Free or near-free for small traffic |
+| **All-in-one VPS** | Apache on VPS | SQL Server Express on same VPS | Simple; one machine to manage |
+| **Railway project** | Railway (Docker) | Railway MSSQL service | One dashboard; internal networking |
+| **University server** | University Apache/IIS | University SQL Server | Team's official production path |
+| **Local development** | XAMPP (Windows) | SQL Server Express (local) | Fastest dev loop |
+
+---
+
 ## Deploying to Vercel (Frontend)
 
 Vercel is a static/serverless hosting platform. It can host the React/Vite **frontend** directly. The PHP backend and the SQL Server database must be hosted separately (see notes below).
