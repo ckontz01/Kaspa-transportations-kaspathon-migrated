@@ -473,6 +473,268 @@ Use environment variables for production-sensitive values.
 
 ---
 
+## Hosting the PHP Backend and SQL Server
+
+The React frontend (deployable on Vercel) is a static SPA that calls the PHP backend over HTTPS.
+The **PHP backend** and the **SQL Server database** must each run on a server that is publicly
+reachable from the internet so that both the frontend and end-users can access them.
+
+---
+
+### Where to host the PHP backend
+
+The backend is a plain PHP application that uses the `sqlsrv`/`pdo_sqlsrv` extension to talk to
+SQL Server. Any host that provides PHP 8.x with those extensions available is suitable.
+
+| Option | Notes |
+|--------|-------|
+| **VPS / Cloud VM** (DigitalOcean, Linode, Hetzner, AWS EC2, Azure VM, etc.) | Full control. Install Apache or Nginx + PHP-FPM + the [Microsoft SQLSRV extension for PHP](https://learn.microsoft.com/en-us/sql/connect/php/installation-tutorial-linux-mac). Point document root at `OSRH_KASPA_PHP/`. |
+| **Render (Docker)** | Create a `Dockerfile` in `OSRH_KASPA_PHP/` based on `php:8.2-apache`, install the SQLSRV PECL extension, and deploy as a Web Service. Render provides a public HTTPS URL automatically. |
+| **Railway** | Use a Railway service with a custom Dockerfile (same as Render approach). Railway can also host the SQL Server database in the same project. |
+| **Shared hosting / cPanel** | Only viable if the host provides the `sqlsrv` PHP extension. Most shared hosts do **not** include it; verify before choosing this option. |
+| **University / institutional server** | The team's official deployment target. Works as long as the server runs PHP 8.x with SQLSRV drivers and can reach the SQL Server instance. |
+
+**Minimum PHP setup on any Linux host:**
+
+```bash
+# Install PHP 8.x + Apache (Ubuntu/Debian example)
+sudo apt-get update
+sudo apt-get install -y apache2 php8.2 php8.2-cli php8.2-common \
+    php8.2-curl php8.2-mbstring php8.2-xml unzip curl
+
+# Install Microsoft ODBC driver (required by sqlsrv)
+# Replace 22.04 below with your Ubuntu version: $(lsb_release -rs)
+curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+    | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list \
+    | sudo tee /etc/apt/sources.list.d/mssql-release.list
+sudo apt-get update
+ACCEPT_EULA=Y sudo apt-get install -y msodbcsql18
+
+# Install SQLSRV PHP extension via PECL
+sudo pecl install sqlsrv pdo_sqlsrv
+echo "extension=sqlsrv.so"     | sudo tee /etc/php/8.2/apache2/conf.d/30-sqlsrv.ini
+echo "extension=pdo_sqlsrv.so" | sudo tee /etc/php/8.2/apache2/conf.d/30-pdo_sqlsrv.ini
+sudo service apache2 restart
+
+# Deploy the application (run from the root of the cloned repository)
+sudo cp -r OSRH_KASPA_PHP /var/www/html/osrh
+```
+
+---
+
+### Where to host SQL Server
+
+| Option | Notes |
+|--------|-------|
+| **Azure SQL Database** (recommended for cloud) | Fully managed, serverless tier available for low-cost/dev use. Accessible from any internet host via TCP 1433. Uses SQL authentication (`DB_USERNAME` / `DB_PASSWORD`). Free trial available. |
+| **SQL Server on the same VPS as PHP** | Install SQL Server Express (free) on the same VM that runs PHP. Use `localhost` (or `127.0.0.1,1433`) as `DB_HOST`. Zero network latency between PHP and SQL Server. |
+| **SQL Server on a separate VM** | Suitable for larger deployments. Open TCP 1433 in the firewall and use the VM's private IP (within a VPC/VNet) or public IP as `DB_HOST`. |
+| **Railway MSSQL service** | One-click MSSQL container in the same Railway project as the PHP service. Use the Railway-provided internal hostname as `DB_HOST`. |
+| **University / institutional SQL Server** | The team's current production target. Accessible only from within the university network or via VPN. |
+
+**Create the database (run once on any target):**
+
+```sql
+CREATE DATABASE OSRH_DB;
+GO
+```
+
+Then execute the setup scripts in order (see [Execute database scripts in order](#5-execute-database-scripts-in-order)).
+
+---
+
+### Wiring the PHP backend to SQL Server
+
+Edit `OSRH_KASPA_PHP/config/config.php` with the values for your chosen host:
+
+```php
+// ---------- DATABASE SETTINGS ----------
+define('DB_HOST',     'your-sql-server-host.example.com');  // hostname or IP; append ,1433 if needed
+define('DB_DATABASE', 'OSRH_DB');
+define('DB_USERNAME', 'osrh_user');   // SQL Server login
+define('DB_PASSWORD', 'StrongPass!'); // SQL Server password
+```
+
+> **Windows Authentication vs. SQL Authentication**
+> - On a local Windows machine (XAMPP + SQL Server Express) you can use Windows Authentication by
+>   leaving `DB_USERNAME` and `DB_PASSWORD` empty. The PHP process connects as the Windows user.
+> - On any Linux server, or when the PHP host and SQL Server are on different machines, you **must**
+>   use SQL Server Authentication: create a SQL login with appropriate permissions and fill in
+>   `DB_USERNAME` / `DB_PASSWORD`.
+
+Also update `BASE_URL` to the public HTTPS URL of the PHP host, and set `APP_ENV` to `production`.
+
+---
+
+### Railway pricing — is it free?
+
+**Short answer: No.** Railway does not offer a permanently free tier; the Trial plan provides a one-time $5 credit that is consumed quickly when running real services.
+
+| Plan | Cost | What you get |
+|------|------|--------------|
+| **Trial** | Free | $5 of one-time usage credits — no credit card needed, but credits are typically consumed within 1–3 days when both services are active, after which services stop. |
+| **Hobby** | $5 / month | Includes $5 of usage credits each month, then pay-as-you-go at the rates below. |
+| **Pro** | $20 / month | Includes $20 of usage credits/month, higher resource limits. |
+
+Railway bills by actual resource consumption:
+
+| Resource | Rate |
+|----------|------|
+| vCPU | ~$0.000463 / vCPU-minute |
+| RAM | ~$0.000231 / GB-minute |
+| Disk | ~$0.000054 / GB-minute |
+| Egress | ~$0.10 / GB |
+
+#### Realistic cost for PHP backend + SQL Server on Railway
+
+Running both services 24 × 7 for a full month (~43,200 minutes):
+
+| Service | vCPU | RAM | Estimated monthly cost |
+|---------|------|-----|------------------------|
+| PHP Docker service (small) | 0.25 | 512 MB | ~$10 |
+| SQL Server / MSSQL (needs more memory) | 0.5 | 1.5 GB | ~$25 |
+| **Total** | | | **~$15 – $35 / month** |
+
+> The $5/month Hobby plan credit covers only a fraction of this; you will be charged the difference.
+> The $5 Trial credit will run out in a matter of days with both services active.
+
+#### Cheaper alternatives if budget is a concern
+
+| Option | PHP host | SQL Server | Realistic cost |
+|--------|----------|------------|----------------|
+| **Render + Azure SQL** | Render free tier (spins down after inactivity) | Azure SQL serverless (free during Azure 12-month trial; ~$5/mo on-demand serverless after trial) | ~$0 – $5 / month |
+| **Oracle Always Free VPS** | Apache + PHP on Oracle Cloud free VM | SQL Server Express on the same free VM | Free (Oracle provides two Always Free ARM VMs) |
+| **Hetzner / DigitalOcean VPS** | Apache + PHP on a €4 – $6/mo VPS | SQL Server Express on the same VPS | ~$5 – $6 / month |
+
+---
+
+### Quick-reference: recommended stack combinations
+
+| Scenario | PHP host | SQL Server | Notes |
+|----------|----------|------------|-------|
+| **Low-cost cloud** | Render (Docker) | Azure SQL free tier | Free or near-free for small traffic |
+| **All-in-one VPS** | Apache on VPS | SQL Server Express on same VPS | Simple; one machine to manage |
+| **Railway project** | Railway (Docker) | Railway MSSQL service | One dashboard; see [Railway pricing](#railway-pricing--is-it-free) (~$15–35/month, not free) |
+| **University server** | University Apache/IIS | University SQL Server | Team's official production path |
+| **Local development** | XAMPP (Windows) | SQL Server Express (local) | Fastest dev loop |
+
+---
+
+## Deploying to Vercel (Frontend)
+
+Vercel is a static/serverless hosting platform. It can host the React/Vite **frontend** directly. The PHP backend and the SQL Server database must be hosted separately (see notes below).
+
+### Can I use Vercel for everything and keep the DB on the university server?
+
+**Short answer: Partly — the frontend goes on Vercel, but the PHP backend cannot.**
+
+| Layer | Vercel? | Why |
+|-------|---------|-----|
+| React / Vite frontend | ✅ Yes | Vercel deploys static Vite builds natively. |
+| PHP backend (`OSRH_KASPA_PHP/`) | ❌ No | Vercel runs Node.js / Python / Go serverless functions. It does **not** support PHP, and there is no way to install the `sqlsrv` / `pdo_sqlsrv` PECL extension on Vercel. |
+| University SQL Server | ❌ Not directly | The university database is reachable only from **within the university network or via VPN**. Any PHP backend that needs to talk to it must therefore run on the university network as well. |
+
+#### Recommended split: Vercel + university server
+
+```
+Browser  ──►  Vercel (React SPA)
+                   │
+                   │  HTTPS API calls  (VITE_API_URL → university PHP host)
+                   ▼
+         University server  (Apache/IIS + PHP 8.x + sqlsrv)
+                   │
+                   │  sqlsrv / pdo_sqlsrv  (internal university network)
+                   ▼
+         University SQL Server
+```
+
+This is actually the team's official production path:
+
+1. **Deploy the frontend to Vercel** — follow the [Step-by-step: deploy the frontend to Vercel](#step-by-step-deploy-the-frontend-to-vercel-from-scratch) guide below.
+2. **Keep the PHP backend on the university server** — the server already has PHP with the SQLSRV drivers and can reach the university SQL Server over the local network.
+3. **Set `VITE_API_URL`** in Vercel's environment variables to the public URL of the university PHP host (e.g. `https://uni-server.example.edu/osrh`).
+4. **Ensure the university server allows inbound HTTPS** from the internet so that the Vercel-hosted React app can reach the PHP API.
+
+> **Why can't the PHP backend live on Vercel too?**
+> Vercel's runtime is built around serverless functions (Node.js, Python, Go, Ruby). PHP is not
+> supported, and the Microsoft SQLSRV extension (`sqlsrv.so` / `pdo_sqlsrv.so`) cannot be installed
+> there. If you want a cloud-hosted PHP backend you need a container-based service such as
+> Railway or Render (see [Where to host the PHP backend](#where-to-host-the-php-backend)).
+
+---
+
+### Database used
+
+- **Engine**: Microsoft SQL Server (including SQL Server Express / Azure SQL)
+- **Dialect**: T-SQL
+- **PHP driver**: `sqlsrv` / `pdo_sqlsrv`
+- All schema, indexes, stored procedures, triggers, and seed data are in the `Database/` folder.
+
+### Architecture for a Vercel deployment
+
+```
+Browser  ──►  Vercel (React SPA)
+                   │
+                   │  HTTPS API calls  (VITE_API_URL)
+                   ▼
+         PHP Backend host  (Railway / Render / VPS / IIS, etc.)
+                   │
+                   │  sqlsrv / pdo_sqlsrv
+                   ▼
+         SQL Server  (Azure SQL / self-hosted MSSQL)
+```
+
+### Step-by-step: deploy the frontend to Vercel from scratch
+
+#### 1. Set up the backend and database first
+
+Before deploying the frontend you need a publicly reachable PHP backend with an active SQL Server database. Complete the [Local Setup](#local-setup-developer-runbook) steps on your chosen server/VPS, or use a managed service such as:
+
+- **PHP hosting**: Railway, Render (Docker image with PHP + SQLSRV extension), or a VPS running Apache/Nginx + PHP-FPM.
+- **SQL Server**: Azure SQL (free tier available), SQL Server on a VPS, or Railway MSSQL service.
+
+Run the database scripts in order on your production database (using SSMS, Azure Data Studio, or `sqlcmd`):
+
+```
+1. Database/OSRH_kaspa_tables.sql
+2. Database/OSRH_kaspa_indexes.sql
+3. Database/OSRH_kaspa_sp.sql
+4. Database/OSRH_kaspa_triggers.sql
+5. Database/OSRH_kaspa_seeding.sql
+```
+
+Update `OSRH_KASPA_PHP/config/config.php` (or use environment variables) with your production `DB_HOST`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`, and set `APP_ENV` to `production` and `BASE_URL` to your backend's public URL.
+
+#### 2. Import the project into Vercel
+
+1. Push this repository to GitHub (already done if you are reading this).
+2. Go to [vercel.com](https://vercel.com) → **Add New Project** → import the repository.
+3. When prompted for the **Root Directory**, set it to **`frontend`** (this is where `package.json` and `vercel.json` live).
+4. Vercel will auto-detect the **Vite** framework. Leave the default build settings:
+   - Build command: `npm run build`
+   - Output directory: `dist`
+
+#### 3. Set the environment variable
+
+In the Vercel project dashboard → **Settings → Environment Variables**, add:
+
+| Name            | Value                                          |
+|-----------------|------------------------------------------------|
+| `VITE_API_URL`  | `https://your-php-backend.example.com/osrh`   |
+
+This tells the React app where to reach the PHP API. The `frontend/.env.example` file documents this variable.
+
+#### 4. Deploy
+
+Click **Deploy**. Vercel will run `npm run build` inside `frontend/`, produce a static `dist/` bundle, and publish it globally on the Vercel CDN. The `frontend/vercel.json` rewrite rule ensures that all client-side routes (e.g. `/passenger/dashboard`) are served by `index.html`.
+
+#### 5. Operator bootstrap
+
+After the database is live, follow the [operator bootstrap](#8-seeded-data-and-operator-bootstrap) steps to create the first operator account.
+
+---
+
 ## Team Note
 
 This repository is suitable for local development and controlled deployments. The team’s official hosted version runs on university infrastructure, while commercial deployments are also possible when runtime and database compatibility requirements are satisfied.
