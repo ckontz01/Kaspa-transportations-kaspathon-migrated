@@ -473,6 +473,81 @@ Use environment variables for production-sensitive values.
 
 ---
 
+## Deploying to Vercel (Frontend)
+
+Vercel is a static/serverless hosting platform. It can host the React/Vite **frontend** directly. The PHP backend and the SQL Server database must be hosted separately (see notes below).
+
+### Database used
+
+- **Engine**: Microsoft SQL Server (including SQL Server Express / Azure SQL)
+- **Dialect**: T-SQL
+- **PHP driver**: `sqlsrv` / `pdo_sqlsrv`
+- All schema, indexes, stored procedures, triggers, and seed data are in the `Database/` folder.
+
+### Architecture for a Vercel deployment
+
+```
+Browser  ──►  Vercel (React SPA)
+                   │
+                   │  HTTPS API calls  (VITE_API_URL)
+                   ▼
+         PHP Backend host  (Railway / Render / VPS / IIS, etc.)
+                   │
+                   │  sqlsrv / pdo_sqlsrv
+                   ▼
+         SQL Server  (Azure SQL / self-hosted MSSQL)
+```
+
+### Step-by-step: deploy the frontend to Vercel from scratch
+
+#### 1. Set up the backend and database first
+
+Before deploying the frontend you need a publicly reachable PHP backend with an active SQL Server database. Complete the [Local Setup](#local-setup-developer-runbook) steps on your chosen server/VPS, or use a managed service such as:
+
+- **PHP hosting**: Railway, Render (Docker image with PHP + SQLSRV extension), or a VPS running Apache/Nginx + PHP-FPM.
+- **SQL Server**: Azure SQL (free tier available), SQL Server on a VPS, or Railway MSSQL service.
+
+Run the database scripts in order on your production database (using SSMS, Azure Data Studio, or `sqlcmd`):
+
+```
+1. Database/OSRH_kaspa_tables.sql
+2. Database/OSRH_kaspa_indexes.sql
+3. Database/OSRH_kaspa_sp.sql
+4. Database/OSRH_kaspa_triggers.sql
+5. Database/OSRH_kaspa_seeding.sql
+```
+
+Update `OSRH_KASPA_PHP/config/config.php` (or use environment variables) with your production `DB_HOST`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`, and set `APP_ENV` to `production` and `BASE_URL` to your backend's public URL.
+
+#### 2. Import the project into Vercel
+
+1. Push this repository to GitHub (already done if you are reading this).
+2. Go to [vercel.com](https://vercel.com) → **Add New Project** → import the repository.
+3. When prompted for the **Root Directory**, set it to **`frontend`** (this is where `package.json` and `vercel.json` live).
+4. Vercel will auto-detect the **Vite** framework. Leave the default build settings:
+   - Build command: `npm run build`
+   - Output directory: `dist`
+
+#### 3. Set the environment variable
+
+In the Vercel project dashboard → **Settings → Environment Variables**, add:
+
+| Name            | Value                                          |
+|-----------------|------------------------------------------------|
+| `VITE_API_URL`  | `https://your-php-backend.example.com/osrh`   |
+
+This tells the React app where to reach the PHP API. The `frontend/.env.example` file documents this variable.
+
+#### 4. Deploy
+
+Click **Deploy**. Vercel will run `npm run build` inside `frontend/`, produce a static `dist/` bundle, and publish it globally on the Vercel CDN. The `frontend/vercel.json` rewrite rule ensures that all client-side routes (e.g. `/passenger/dashboard`) are served by `index.html`.
+
+#### 5. Operator bootstrap
+
+After the database is live, follow the [operator bootstrap](#8-seeded-data-and-operator-bootstrap) steps to create the first operator account.
+
+---
+
 ## Team Note
 
 This repository is suitable for local development and controlled deployments. The team’s official hosted version runs on university infrastructure, while commercial deployments are also possible when runtime and database compatibility requirements are satisfied.
